@@ -14,20 +14,21 @@ import org.springframework.batch.item.database.builder.JdbcBatchItemWriterBuilde
 import org.springframework.batch.item.file.FlatFileItemReader;
 import org.springframework.batch.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.batch.item.file.mapping.BeanWrapperFieldSetMapper;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
 
+import cn.swift.batchprocessing.exception.SkipException;
+import cn.swift.batchprocessing.listener.step.DummyChunkListener;
+import cn.swift.batchprocessing.listener.step.DummyItemProcessListener;
+import cn.swift.batchprocessing.listener.step.DummyItemReadListener;
+import cn.swift.batchprocessing.listener.step.DummyItemWriteListener;
+import cn.swift.batchprocessing.listener.step.DummySkipListener;
+import cn.swift.batchprocessing.listener.step.DummyStepExecutionListener;
+
 @Configuration
 @EnableBatchProcessing
 public class BatchConfiguration {
-
-    @Autowired
-    public JobBuilderFactory jobBuilderFactory;
-
-    @Autowired
-    public StepBuilderFactory stepBuilderFactory;
 
     @Bean
     public FlatFileItemReader<Person> reader() {
@@ -35,7 +36,7 @@ public class BatchConfiguration {
         .name("personItemReader")
         .resource(new ClassPathResource("sample-data.csv"))
         .delimited()
-        .names("firstName", "lastName")
+        .names("id", "firstName", "lastName")
         .fieldSetMapper(new BeanWrapperFieldSetMapper<Person>() {{setTargetType(Person.class);}})//NOSONAR
         .build();
     }
@@ -49,13 +50,14 @@ public class BatchConfiguration {
     public JdbcBatchItemWriter<Person> writer(DataSource dataSource){
         return new JdbcBatchItemWriterBuilder<Person>()
                 .itemSqlParameterSourceProvider(new BeanPropertyItemSqlParameterSourceProvider<>())
-                .sql("INSERT INTO people (first_name, last_name) VALUES (:firstName, :lastName)")
+                .sql("INSERT INTO people (id, first_name, last_name) VALUES (:id, :firstName, :lastName)")
                 .dataSource(dataSource)
                 .build();
     }
     
     @Bean
-    public Job importUserJob(JobCompletionNotificationListener listener, Step step1) {
+    public Job importUserJob(JobCompletionNotificationListener listener, Step step1,
+            JobBuilderFactory jobBuilderFactory) {
       return jobBuilderFactory.get("importUserJob")
         .incrementer(new RunIdIncrementer())
         .listener(listener)
@@ -65,12 +67,23 @@ public class BatchConfiguration {
     }
 
     @Bean
-    public Step step1(JdbcBatchItemWriter<Person> writer) {
+    public Step step1(JdbcBatchItemWriter<Person> writer,
+            StepBuilderFactory stepBuilderFactory) {
       return stepBuilderFactory.get("step1")
         .<Person, Person> chunk(10)
+        .writer(writer)
         .reader(reader())
         .processor(processor())
-        .writer(writer)
+        .faultTolerant()
+        .noRetry(SkipException.class)
+        .skipLimit(1)
+        .skip(SkipException.class)
+        .listener(new DummySkipListener())
+        .listener(new DummyItemReadListener())
+        .listener(new DummyItemProcessListener())
+        .listener(new DummyItemWriteListener())
+        .listener(new DummyStepExecutionListener())
+        .listener(new DummyChunkListener())
         .build();
     }
     
